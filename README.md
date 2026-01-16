@@ -100,6 +100,44 @@ while True:
 - `get_shape(name: str)`, `get_dtype(name)`, `get_ndim(name)`
 - `wait_for_array(name: str, timeout: float)`
 
+## C++ Support
+
+This library includes a C++ header-only library for reading/writing compatible shared memory segments.
+
+### Include
+Copy `include/posixipc_image_transport.hpp` to your project.
+
+### C++ Writer Example
+```cpp
+#include "posixipc_image_transport.hpp"
+// ...
+using namespace posixipc_image_transport;
+
+PosixIPCWriter writer("camera_01");
+
+// Create data
+int width = 640, height = 480;
+std::vector<uint8_t> image(width * height * 3);
+
+// Write to 'image' channel
+writer.set_image(image.data(), image.size(), height, width, 3);
+```
+
+### C++ Reader Example
+```cpp
+#include "posixipc_image_transport.hpp"
+// ...
+using namespace posixipc_image_transport;
+
+PosixIPCReader reader("camera_01");
+
+// Read from 'image' channel
+std::vector<uint8_t> buffer(640 * 480 * 3);
+if(reader.read("image", buffer.data(), buffer.size())) {
+    // Process data...
+}
+```
+
 ## Requirements
 - Python >= 3.9
 - `posix_ipc`
