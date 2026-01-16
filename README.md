@@ -17,14 +17,14 @@ Designed for low-latency video processing pipelines where copying data through q
 
 ### From Source
 ```bash
-git clone https://github.com/yourusername/posixipc_image_transport.git
+git clone https://github.com/JureHudoklin/posixipc_image_transport.git
 cd posixipc_image_transport
 pip install .
 ```
 
 ### From GitHub (Directly)
 ```bash
-pip install git+https://github.com/yourusername/posixipc_image_transport.git
+pip install git+https://github.com/JureHudoklin/posixipc_image_transport.git
 ```
 
 ## Usage
