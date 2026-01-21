@@ -19,6 +19,7 @@ namespace posixipc_image_transport {
 
 static const size_t HEADER_SIZE = 64;
 static const uint32_t MAGIC = 0x12345678;
+static const size_t TIMESTAMP_OFFSET = 32;  // Offset in bytes where timestamp is stored
 
 enum class DataType : uint32_t {
     UINT8 = 0,
@@ -174,7 +175,7 @@ public:
         }
     }
     
-    void write(const void* data, size_t data_len) {
+    void write(const void* data, size_t data_len, double timestamp = -1.0) {
         if (sem_wait(sem) == -1) {
             // Handle error, maybe EINTR
              std::cerr << "Warning: sem_wait failed" << std::endl;
@@ -188,12 +189,22 @@ public:
             throw std::runtime_error("Data size mismatch");
         }
         
+        // Use current time if no timestamp provided
+        if (timestamp < 0) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            timestamp = ts.tv_sec + ts.tv_nsec / 1e9;
+        }
+        
+        // Write timestamp at offset
+        memcpy((char*)mmap_addr + TIMESTAMP_OFFSET, &timestamp, sizeof(double));
+        
         memcpy((char*)mmap_addr + HEADER_SIZE, data, data_len);
         
         sem_post(sem);
     }
     
-    void read(void* dest, size_t dest_len) {
+    void read(void* dest, size_t dest_len, double* timestamp = nullptr) {
         if (sem_wait(sem) == -1) {
             std::cerr << "Warning: sem_wait failed" << std::endl;
             return;
@@ -203,6 +214,11 @@ public:
         if (dest_len != expected_size) {
              sem_post(sem);
              throw std::runtime_error("Destination size mismatch");
+        }
+        
+        // Read timestamp if requested
+        if (timestamp != nullptr) {
+            memcpy(timestamp, (char*)mmap_addr + TIMESTAMP_OFFSET, sizeof(double));
         }
         
         memcpy(dest, (char*)mmap_addr + HEADER_SIZE, dest_len);
@@ -248,14 +264,14 @@ public:
         return channels[suffix];
     }
     
-    void set_data(const std::string& suffix, const void* data, size_t data_byte_size, const std::vector<uint32_t>& shape, DataType dtype) {
+    void set_data(const std::string& suffix, const void* data, size_t data_byte_size, const std::vector<uint32_t>& shape, DataType dtype, double timestamp = -1.0) {
         auto ch = ensure_channel(suffix, shape, dtype);
-        ch->write(data, data_byte_size);
+        ch->write(data, data_byte_size, timestamp);
     }
     
     // Helper helpers
-    void set_image(const void* data, size_t size, uint32_t height, uint32_t width, uint32_t channels, DataType dtype=DataType::UINT8) {
-        set_data("image", data, size, {height, width, channels}, dtype);
+    void set_image(const void* data, size_t size, uint32_t height, uint32_t width, uint32_t channels, DataType dtype=DataType::UINT8, double timestamp = -1.0) {
+        set_data("image", data, size, {height, width, channels}, dtype, timestamp);
     }
 };
 
@@ -282,7 +298,7 @@ public:
         }
     }
     
-    bool read(const std::string& suffix, void* dest, size_t dest_size) {
+    bool read(const std::string& suffix, void* dest, size_t dest_size, double* timestamp = nullptr) {
         auto ch = get_channel(suffix);
         if (!ch) return false;
         
@@ -295,7 +311,7 @@ public:
              return false;
         }
         
-        ch->read(dest, dest_size);
+        ch->read(dest, dest_size, timestamp);
         return true;
     }
     

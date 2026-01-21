@@ -8,10 +8,11 @@ import time
 from typing import Optional, Tuple, Union
 
 # Protocol definition
-# Header: [Magic (4 bytes), Dtype (4 bytes), Ndim (4 bytes), Shape (4*3=12 bytes), Timestamp (8 bytes)]
-# Total Header Size = 32 bytes (aligned)
+# Header: [Magic (4 bytes), Dtype (4 bytes), Ndim (4 bytes), Shape (4*5=20 bytes), Timestamp (8 bytes)]
+# Total Header Size = 64 bytes (aligned)
 HEADER_SIZE = 64 # Give plenty of room for future
 MAGIC = 0x12345678
+TIMESTAMP_OFFSET = 32  # Offset in bytes where timestamp is stored (after header struct)
 
 class DataType(enum.IntEnum):
     UINT8 = 0
@@ -153,7 +154,7 @@ class ChannelHandler:
         self.mmap = mmap.mmap(self.shm.fd, self.size) # Default prot is read/write
         self.shm.close_fd()
 
-    def write(self, array: np.ndarray):
+    def write(self, array: np.ndarray, timestamp: Optional[float] = None):
         if array.shape != self.shape:
              raise ValueError(f"Shape mismatch: Expected {self.shape}, got {array.shape}")
         if array.dtype != self.dtype:
@@ -161,9 +162,17 @@ class ChannelHandler:
              if not np.can_cast(array.dtype, self.dtype):
                  raise ValueError(f"Dtype mismatch: Expected {self.dtype}, got {array.dtype}")
 
+        # Use current time if no timestamp provided
+        if timestamp is None:
+            timestamp = time.time()
+
         # Acquire lock
         try:
             self.sem.acquire(timeout=1.0) # 1 sec timeout
+            
+            # Write timestamp
+            self.mmap.seek(TIMESTAMP_OFFSET)
+            self.mmap.write(struct.pack("d", timestamp))
             
             # Write data
             # Using np.ndarray with buffer mechanism
@@ -180,9 +189,14 @@ class ChannelHandler:
         finally:
             self.sem.release()
 
-    def read(self) -> Optional[np.ndarray]:
+    def read(self, return_timestamp: bool = False) -> Union[Optional[np.ndarray], Tuple[Optional[np.ndarray], Optional[float]]]:
         try:
             self.sem.acquire(timeout=1.0)
+            
+            # Read timestamp
+            self.mmap.seek(TIMESTAMP_OFFSET)
+            timestamp_bytes = self.mmap.read(8)
+            timestamp = struct.unpack("d", timestamp_bytes)[0] if timestamp_bytes else 0.0
             
             # Copy data out to avoid corruption during read if writer writes
             # Alternatively, we could return a view but that puts the lock concept in jeopardy 
@@ -191,10 +205,15 @@ class ChannelHandler:
             
             src_array = np.ndarray(self.shape, dtype=self.dtype, buffer=self.mmap, offset=HEADER_SIZE)
             data = src_array.copy()
+            
+            if return_timestamp:
+                return data, timestamp
             return data
             
         except posix_ipc.BusyError:
             # print(f"Warning: Read timeout on {self.name}")
+            if return_timestamp:
+                return None, None
             return None
         finally:
             self.sem.release()
@@ -254,25 +273,25 @@ class PosixIPCWriter:
         
         return self.channels[suffix]
 
-    def set_image(self, image: np.ndarray):
+    def set_image(self, image: np.ndarray, timestamp: Optional[float] = None):
         ch = self._ensure_channel("image", image)
-        ch.write(image)
+        ch.write(image, timestamp)
 
-    def set_depth(self, depth: np.ndarray):
+    def set_depth(self, depth: np.ndarray, timestamp: Optional[float] = None):
         ch = self._ensure_channel("depth", depth)
-        ch.write(depth)
+        ch.write(depth, timestamp)
 
-    def set_pointcloud(self, pc: np.ndarray):
+    def set_pointcloud(self, pc: np.ndarray, timestamp: Optional[float] = None):
         ch = self._ensure_channel("pointcloud", pc)
-        ch.write(pc)
+        ch.write(pc, timestamp)
         
-    def set_mask(self, mask: np.ndarray):
+    def set_mask(self, mask: np.ndarray, timestamp: Optional[float] = None):
         ch = self._ensure_channel("mask", mask)
-        ch.write(mask)
+        ch.write(mask, timestamp)
 
-    def set_array(self, name: str, array: np.ndarray):
+    def set_array(self, name: str, array: np.ndarray, timestamp: Optional[float] = None):
         ch = self._ensure_channel(name, array)
-        ch.write(array)
+        ch.write(array, timestamp)
 
     def cleanup(self):
         for ch in self.channels.values():
@@ -301,30 +320,30 @@ class PosixIPCReader:
             print(f"Error connecting to {suffix}: {e}")
             return None
 
-    def get_image(self) -> Optional[np.ndarray]:
+    def get_image(self, return_timestamp: bool = False) -> Union[Optional[np.ndarray], Tuple[Optional[np.ndarray], Optional[float]]]:
         ch = self._get_channel("image")
-        if ch: return ch.read()
-        return None
+        if ch: return ch.read(return_timestamp)
+        return (None, None) if return_timestamp else None
 
-    def get_depth(self) -> Optional[np.ndarray]:
+    def get_depth(self, return_timestamp: bool = False) -> Union[Optional[np.ndarray], Tuple[Optional[np.ndarray], Optional[float]]]:
         ch = self._get_channel("depth")
-        if ch: return ch.read()
-        return None
+        if ch: return ch.read(return_timestamp)
+        return (None, None) if return_timestamp else None
 
-    def get_pointcloud(self) -> Optional[np.ndarray]:
+    def get_pointcloud(self, return_timestamp: bool = False) -> Union[Optional[np.ndarray], Tuple[Optional[np.ndarray], Optional[float]]]:
         ch = self._get_channel("pointcloud")
-        if ch: return ch.read()
-        return None
+        if ch: return ch.read(return_timestamp)
+        return (None, None) if return_timestamp else None
 
-    def get_mask(self) -> Optional[np.ndarray]:
+    def get_mask(self, return_timestamp: bool = False) -> Union[Optional[np.ndarray], Tuple[Optional[np.ndarray], Optional[float]]]:
         ch = self._get_channel("mask")
-        if ch: return ch.read()
-        return None
+        if ch: return ch.read(return_timestamp)
+        return (None, None) if return_timestamp else None
         
-    def get_array(self, name: str) -> Optional[np.ndarray]:
+    def get_array(self, name: str, return_timestamp: bool = False) -> Union[Optional[np.ndarray], Tuple[Optional[np.ndarray], Optional[float]]]:
         ch = self._get_channel(name)
-        if ch: return ch.read()
-        return None
+        if ch: return ch.read(return_timestamp)
+        return (None, None) if return_timestamp else None
 
     def get_shape(self, name: str) -> Optional[Tuple]:
         """Get the shape of the array for a given channel name (e.g. 'image', 'depth')."""
